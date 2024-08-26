@@ -2,7 +2,7 @@
 
 pub const TASK_COMM_LEN: usize = 16;
 pub const UNIX_PATH_MAX: usize = 108;
-pub const SS_MAX_SEG_SIZE: usize = 1024;
+pub const SS_MAX_SEG_SIZE: usize = 1024 * 4;
 pub const SS_MAX_SEGS_PER_MSG: usize = 10;
 
 pub type UnixPathBuffer = [u8; UNIX_PATH_MAX];

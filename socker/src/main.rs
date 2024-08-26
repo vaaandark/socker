@@ -7,8 +7,21 @@ use aya::{include_bytes_aligned, Bpf};
 use aya_log::BpfLogger;
 use bytes::BytesMut;
 use log::{debug, info, warn};
+use pretty_hex::{config_hex, HexConfig};
 use socker_common::PacketLog;
 use tokio::{signal, task};
+
+fn to_str_if_http_request(data: &[u8]) -> Option<&str> {
+    if data[..4] == [b'H', b'T', b'T', b'P'] {
+        Some(
+            unsafe { CStr::from_ptr(data as *const [u8] as *const i8) }
+                .to_str()
+                .unwrap(),
+        )
+    } else {
+        None
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -58,6 +71,13 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let mut perf_array = AsyncPerfEventArray::try_from(bpf.take_map("EVENTS").unwrap())?;
 
+    let cfg = HexConfig {
+        title: false,
+        width: 8,
+        group: 0,
+        ..HexConfig::default()
+    };
+
     for cpu_id in online_cpus()? {
         let mut buf = perf_array.open(cpu_id, None)?;
 
@@ -69,30 +89,35 @@ async fn main() -> Result<(), anyhow::Error> {
             let events = buf.read_events(&mut buffers).await.unwrap();
             for buf in buffers.iter_mut().take(events.read) {
                 let ptr = buf.as_ptr() as *const PacketLog;
-                let mut packet_log = unsafe { ptr.read_unaligned() };
+                let packet_log = unsafe { ptr.read_unaligned() };
                 info!(">>>Get a packet<<<");
 
                 let comm = unsafe { CStr::from_ptr(&packet_log.comm as *const u8 as *const i8) }
                     .to_str()
                     .unwrap_or("");
-                if packet_log.path[0] == b'\0' {
-                    packet_log.path[0] = b'@';
-                }
-                let path = unsafe { CStr::from_ptr(&packet_log.path as *const u8 as *const i8) }
+                let path = if packet_log.path[0] == b'\0' {
+                    &packet_log.path[1..]
+                } else {
+                    &packet_log.path
+                };
+                let path = unsafe { CStr::from_ptr(path as *const [u8] as *const i8) }
                     .to_str()
                     .unwrap_or("bad unix socket path");
-                info!(
-                    "src: {} | dst: {} | length: {} | cmd: {:?} | path: {:?}",
-                    packet_log.pid, packet_log.peer_pid, packet_log.len, comm, path
+                println!(
+                    "{} ({} > {}) {} {} bytes",
+                    comm, packet_log.pid, packet_log.peer_pid, path, packet_log.len
                 );
-                info!(
-                    "data: {:?}",
-                    packet_log
-                        .data
+                let data = &packet_log.data[..packet_log.len];
+                if let Some(http) = to_str_if_http_request(data) {
+                    println!("{}", http);
+                } else {
+                    let data = data
                         .iter()
                         .rposition(|&c| c != b'\0')
-                        .map_or(&packet_log.data[..], |idx| &packet_log.data[..=idx])
-                );
+                        .map_or(data, |idx| &data[..=idx]);
+                    println!("{}", config_hex(&data, cfg));
+                }
+                println!();
             }
         });
     }

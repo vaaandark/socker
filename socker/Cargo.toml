@@ -14,6 +14,7 @@ libc = "0.2"
 log = "0.4"
 tokio = { version = "1.25", features = ["macros", "rt", "rt-multi-thread", "net", "signal"] }
 bytes = "1.7.1"
+pretty-hex = "0.4.1"
 
 [[bin]]
 name = "socker"
