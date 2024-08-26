@@ -23,3 +23,12 @@ pub struct PacketLog {
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for PacketLog {}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct Config {
+    pub pid: u32,
+    pub seg_size: usize,
+    pub seg_per_msg: usize,
+    pub sock_path: UnixPathBuffer,
+}

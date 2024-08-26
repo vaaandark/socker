@@ -1,3 +1,5 @@
+use std::ffi::CStr;
+
 use aya::maps::AsyncPerfEventArray;
 use aya::programs::KProbe;
 use aya::util::online_cpus;
@@ -67,11 +69,21 @@ async fn main() -> Result<(), anyhow::Error> {
             let events = buf.read_events(&mut buffers).await.unwrap();
             for buf in buffers.iter_mut().take(events.read) {
                 let ptr = buf.as_ptr() as *const PacketLog;
-                let packet_log = unsafe { ptr.read_unaligned() };
+                let mut packet_log = unsafe { ptr.read_unaligned() };
                 info!(">>>Get a packet<<<");
+
+                let comm = unsafe { CStr::from_ptr(&packet_log.comm as *const u8 as *const i8) }
+                    .to_str()
+                    .unwrap_or("");
+                if packet_log.path[0] == b'\0' {
+                    packet_log.path[0] = b'@';
+                }
+                let path = unsafe { CStr::from_ptr(&packet_log.path as *const u8 as *const i8) }
+                    .to_str()
+                    .unwrap_or("bad unix socket path");
                 info!(
-                    "src: {} | dst: {} | length: {}",
-                    packet_log.pid, packet_log.peer_pid, packet_log.len
+                    "src: {} | dst: {} | length: {} | cmd: {:?} | path: {:?}",
+                    packet_log.pid, packet_log.peer_pid, packet_log.len, comm, path
                 );
                 info!(
                     "data: {:?}",

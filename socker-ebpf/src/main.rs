@@ -3,12 +3,13 @@
 
 use core::mem::offset_of;
 
+use aya_ebpf::helpers::bpf_probe_read_kernel_buf;
 use aya_ebpf::maps::{PerCpuArray, PerfEventArray};
 use aya_ebpf::{
     cty::c_void,
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_probe_read_kernel,
-        bpf_probe_read_kernel_str_bytes, bpf_probe_read_user_str_bytes,
+        bpf_probe_read_user_str_bytes,
     },
     macros::{kprobe, map},
     programs::ProbeContext,
@@ -22,13 +23,6 @@ use socker_common::*;
 #[allow(dead_code)]
 mod binding;
 use crate::binding::{msghdr, sockaddr_un, socket, unix_address, unix_sock};
-
-struct Config {
-    pid: u32,
-    seg_size: usize,
-    seg_per_msg: usize,
-    sock_path: UnixPathBuffer,
-}
 
 static mut CONFIG: Config = Config {
     pid: 0,
@@ -63,22 +57,20 @@ fn is_path_matched(path: &UnixPathBuffer) -> bool {
     config_path_len <= path_len && config_path[..config_path_len] == path[..config_path_len]
 }
 
-fn is_sock_path_matched(sock: *const unix_sock, path: &mut UnixPathBuffer) -> Result<bool, i64> {
-    let addr =
-        unsafe { bpf_probe_read_kernel(bpf_probe_read_kernel(&((*sock).addr)).or(Err(1i64))?) }
-            .or(Err(1i64))?;
-    if addr.len == 0 {
+fn is_sock_path_matched(
+    sock: *const unix_sock,
+    path_buf: &mut UnixPathBuffer,
+) -> Result<bool, i64> {
+    let addr = unsafe { bpf_probe_read_kernel(&((*sock).addr)) }.or(Err(1i64))?;
+    let len = unsafe { bpf_probe_read_kernel(&(*addr).len) }.or(Err(1i64))?;
+    if len == 0 {
         return Ok(false);
     }
     let sock_path = unsafe {
-        ((&addr as *const unix_address) as *const u8)
-            .add(offset_of!(unix_address, name) + offset_of!(sockaddr_un, sun_path))
+        (addr as *const u8).add(offset_of!(unix_address, name) + offset_of!(sockaddr_un, sun_path))
     };
-    if unsafe { bpf_probe_read_kernel_str_bytes(sock_path, path) }.is_ok() {
-        Ok(is_path_matched(path))
-    } else {
-        Err(1i64)
-    }
+    unsafe { bpf_probe_read_kernel_buf(sock_path, path_buf) }.or(Err(1i64))?;
+    Ok(is_path_matched(path_buf))
 }
 
 fn collect_data(ctx: &ProbeContext, packet_log: &mut PacketLog, buff: *const c_void, len: usize) {
@@ -119,17 +111,9 @@ fn capture(
         unsafe { bpf_probe_read_kernel(&((sock.sk as *const c_void) as *const unix_sock)) }
             .or(Err(1))?;
 
-    let peer_unix_sock = unsafe {
-        bpf_probe_read_kernel(
-            &(((&((*unix_sock).peer) as *const *mut binding::sock) as *const c_void)
-                as *const unix_sock),
-        )
-    }
-    .or(Err(1))?;
-
     let path = &mut packet_log.path;
-    if !is_sock_path_matched(unix_sock, path)? || is_sock_path_matched(peer_unix_sock, path)? {
-        // return Ok(0);
+    if !is_sock_path_matched(unix_sock, path)? {
+        return Ok(0);
     }
 
     packet_log.pid = pid;
