@@ -6,7 +6,6 @@ use aya_log::BpfLogger;
 use bytes::BytesMut;
 use log::{debug, info, warn};
 use socker_common::PacketLog;
-use std::ffi::CStr;
 use tokio::{signal, task};
 
 #[tokio::main]
@@ -69,16 +68,19 @@ async fn main() -> Result<(), anyhow::Error> {
             for buf in buffers.iter_mut().take(events.read) {
                 let ptr = buf.as_ptr() as *const PacketLog;
                 let packet_log = unsafe { ptr.read_unaligned() };
+                info!(">>>Get a packet<<<");
                 info!(
-                    "Get packet from {} to {}, length {}",
+                    "src: {} | dst: {} | length: {}",
                     packet_log.pid, packet_log.peer_pid, packet_log.len
                 );
-                let cstr = unsafe { CStr::from_ptr(&packet_log.data as *const u8 as *const i8) };
-                if let Ok(slice) = cstr.to_str() {
-                    info!("{}", slice);
-                } else {
-                    info!("bad str");
-                }
+                info!(
+                    "data: {:?}",
+                    packet_log
+                        .data
+                        .iter()
+                        .rposition(|&c| c != b'\0')
+                        .map_or(&packet_log.data[..], |idx| &packet_log.data[..=idx])
+                );
             }
         });
     }

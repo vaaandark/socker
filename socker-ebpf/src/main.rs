@@ -3,20 +3,18 @@
 
 use core::mem::offset_of;
 
-use aya_ebpf::bindings::BPF_F_CURRENT_CPU;
-use aya_ebpf::helpers::{bpf_get_current_task, bpf_probe_read_kernel_buf};
 use aya_ebpf::maps::{PerCpuArray, PerfEventArray};
 use aya_ebpf::{
     cty::c_void,
     helpers::{
         bpf_get_current_comm, bpf_get_current_pid_tgid, bpf_probe_read_kernel,
-        bpf_probe_read_kernel_str_bytes,
+        bpf_probe_read_kernel_str_bytes, bpf_probe_read_user_str_bytes,
     },
     macros::{kprobe, map},
     programs::ProbeContext,
 };
-use socker_common::*;
 use aya_log_ebpf::info;
+use socker_common::*;
 
 #[allow(non_upper_case_globals)]
 #[allow(non_snake_case)]
@@ -90,13 +88,14 @@ fn collect_data(ctx: &ProbeContext, packet_log: &mut PacketLog, buff: *const c_v
     packet_log.len = len;
 
     let n = len.min(seg_size - 1);
-    let buf = &mut packet_log.data[..n];
-    if let Err(e) = unsafe { bpf_probe_read_kernel_str_bytes(buff as *const u8, buf) } {
-        info!(ctx, "Failed to read: {}", e);
+    if let Err(e) =
+        unsafe { bpf_probe_read_user_str_bytes(buff as *const u8, &mut packet_log.data[..n]) }
+    {
+        info!(ctx, "Failed to read str: {}", e);
     }
     packet_log.data[n.min(SS_MAX_SEG_SIZE - 1)] = b'\0';
 
-    EVENTS.output(ctx, &packet_log, 0);
+    EVENTS.output(ctx, packet_log, 0);
 }
 
 #[allow(unused)]
@@ -158,13 +157,9 @@ fn capture(
         if i >= nsegs || i >= n as u64 {
             break;
         }
-        {
-
-            let iov = unsafe {bpf_probe_read_kernel(iov)}.or(Err(1i64))?;
-        // let iov_base = unsafe { bpf_probe_read_kernel(&(*iov).iov_base) }.or(Err(1i64))?;
-        // let iov_len = unsafe { bpf_probe_read_kernel(&(*iov).iov_len) }.or(Err(1i64))?;
-            collect_data(ctx, packet_log, iov.iov_base, iov.iov_len as usize);
-        }
+        let iov_base = unsafe { bpf_probe_read_kernel(&(*iov).iov_base) }.or(Err(1i64))?;
+        let iov_len = unsafe { bpf_probe_read_kernel(&(*iov).iov_len) }.or(Err(1i64))?;
+        collect_data(ctx, packet_log, iov_base, iov_len as usize);
         iov = unsafe { iov.add(1) };
     }
 
